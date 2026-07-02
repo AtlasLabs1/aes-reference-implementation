@@ -44,5 +44,19 @@
       - redis
       - observation-service
 
+  assessment-service:
+    build:
+      context: ./execution/services/assessment
+    container_name: aes-assessment-service
+    environment:
+      DATABASE_URL: postgresql://aes:aes@postgres:5432/aes_lab
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8002:8002"
+    depends_on:
+      - postgres
+      - redis
+      - evidence-service
+
 volumes:
   aes_postgres_data:
