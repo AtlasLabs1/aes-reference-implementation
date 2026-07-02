@@ -1,0 +1,1 @@
+services:  postgres:    image: postgres:16    container_name: aes-postgres    environment:      POSTGRES_USER: aes      POSTGRES_PASSWORD: aes      POSTGRES_DB: aes_lab    ports:      - "5432:5432"  redis:    image: redis:7    container_name: aes-redis    ports:      - "6379:6379" 
