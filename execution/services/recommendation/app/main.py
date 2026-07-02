@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 import json
 import threading
 import time
+import os
+import yaml
 
 from aes_common.database import db
 from aes_common.ids import new_id
@@ -27,42 +29,57 @@ def init_db():
             recommendation_type TEXT NOT NULL,
             priority TEXT NOT NULL,
             message TEXT NOT NULL,
-            trace_ref TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         """)
         conn.commit()
 
 
+def load_water_dkm():
+    path = os.getenv("DKM_WATER_PATH", "/app/dkms/water/v0.1/water.dkm.yaml")
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+DKM = None
+
+
 def load_assessment(assessment_id):
     with db() as conn:
         return conn.execute("""
-            SELECT assessment_id, evidence_id, managed_object_id,
-                   assessment_type, severity, confidence, summary
+            SELECT assessment_id, managed_object_id, assessment_type, severity
             FROM assessments
             WHERE assessment_id = %s
         """, (assessment_id,)).fetchone()
 
 
-def create_recommendation(row):
-    assessment_id, evidence_id, managed_object_id, assessment_type, severity, confidence, summary = row
+def find_recommendation_for_assessment(assessment_type):
+    for rule in DKM.get("rules", []):
+        assessment = rule.get("assessment", {})
 
-    recommendation_type = "NoActionRequired"
-    priority = "Info"
-    message = "No action required. Continue monitoring."
+        if assessment.get("type") == assessment_type:
+            recommendation = rule.get("recommendation")
 
-    if assessment_type == "CriticalLowTankLevel":
-        recommendation_type = "ImmediateWaterSupplyAction"
-        priority = "Critical"
-        message = "Water tank level is critically low. Refill immediately or start available pump if safe."
-    elif assessment_type == "LowTankLevel":
-        recommendation_type = "PlanWaterRefill"
-        priority = "Warning"
-        message = "Water tank level is low. Plan refill or verify water supply availability."
-    elif assessment_type == "NormalTankLevel":
-        recommendation_type = "ContinueMonitoring"
-        priority = "Info"
-        message = "Water tank level is normal. Continue monitoring."
+            if recommendation:
+                return {
+                    "ruleId": rule["id"],
+                    "recommendationType": recommendation["type"],
+                    "priority": recommendation["priority"],
+                    "message": recommendation["message"],
+                }
+
+    return {
+        "ruleId": "NO_MATCH",
+        "recommendationType": "NoRecommendation",
+        "priority": "Info",
+        "message": "No DKM recommendation matched this assessment.",
+    }
+
+
+def create_recommendation(assessment):
+    assessment_id, managed_object_id, assessment_type, severity = assessment
+
+    result = find_recommendation_for_assessment(assessment_type)
 
     recommendation_id = new_id("REC")
 
@@ -74,18 +91,16 @@ def create_recommendation(row):
                 managed_object_id,
                 recommendation_type,
                 priority,
-                message,
-                trace_ref
+                message
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s)
         """, (
             recommendation_id,
             assessment_id,
             managed_object_id,
-            recommendation_type,
-            priority,
-            message,
-            evidence_id
+            result["recommendationType"],
+            result["priority"],
+            result["message"],
         ))
         conn.commit()
 
@@ -95,13 +110,14 @@ def create_recommendation(row):
         "recommendationId": recommendation_id,
         "assessmentId": assessment_id,
         "managedObjectId": managed_object_id,
-        "recommendationType": recommendation_type,
-        "priority": priority,
+        "recommendationType": result["recommendationType"],
+        "priority": result["priority"],
+        "ruleId": result["ruleId"],
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     publish_event(event)
-    print(f"[Recommendation Service] RecommendationCreated published: {recommendation_id}")
+    print(f"[Recommendation Service] RecommendationCreated published: {recommendation_id} using rule {result['ruleId']}")
 
 
 def event_worker():
@@ -128,13 +144,13 @@ def event_worker():
                         continue
 
                     assessment_id = event.get("assessmentId")
-                    row = load_assessment(assessment_id)
+                    assessment = load_assessment(assessment_id)
 
-                    if not row:
+                    if not assessment:
                         print(f"[Recommendation Service] Assessment not found: {assessment_id}")
                         continue
 
-                    create_recommendation(row)
+                    create_recommendation(assessment)
 
         except Exception as ex:
             print(f"[Recommendation Service] Worker error: {ex}")
@@ -143,11 +159,18 @@ def event_worker():
 
 @app.on_event("startup")
 def startup():
+    global DKM
     init_db()
+    DKM = load_water_dkm()
+    print(f"[Recommendation Service] Loaded DKM: {DKM['dkm']['name']} v{DKM['dkm']['version']}")
     thread = threading.Thread(target=event_worker, daemon=True)
     thread.start()
 
 
 @app.get("/health")
 def health():
-    return {"service": "AES Recommendation Service", "status": "Healthy"}
+    return {
+        "service": "AES Recommendation Service",
+        "status": "Healthy",
+        "dkm": DKM["dkm"] if DKM else None
+    }
