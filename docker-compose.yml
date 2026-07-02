@@ -19,44 +19,16 @@
 
   observation-service:
     build:
-      context: ./execution/services/observation
+      context: .
+      dockerfile: execution/services/observation/Dockerfile
     container_name: aes-observation-service
-    environment:
-      DATABASE_URL: postgresql://aes:aes@postgres:5432/aes_lab
-      REDIS_URL: redis://redis:6379/0
+    env_file:
+      - .env
     ports:
       - "8000:8000"
     depends_on:
       - postgres
       - redis
-
-  evidence-service:
-    build:
-      context: ./execution/services/evidence
-    container_name: aes-evidence-service
-    environment:
-      DATABASE_URL: postgresql://aes:aes@postgres:5432/aes_lab
-      REDIS_URL: redis://redis:6379/0
-    ports:
-      - "8001:8001"
-    depends_on:
-      - postgres
-      - redis
-      - observation-service
-
-  assessment-service:
-    build:
-      context: ./execution/services/assessment
-    container_name: aes-assessment-service
-    environment:
-      DATABASE_URL: postgresql://aes:aes@postgres:5432/aes_lab
-      REDIS_URL: redis://redis:6379/0
-    ports:
-      - "8002:8002"
-    depends_on:
-      - postgres
-      - redis
-      - evidence-service
 
 volumes:
   aes_postgres_data:
