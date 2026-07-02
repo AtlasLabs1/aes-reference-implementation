@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 import json
 import threading
 import time
+import os
+import yaml
 
 from aes_common.database import db
 from aes_common.ids import new_id
@@ -16,6 +18,22 @@ from aes_common.config import AES_EVENT_STREAM
 
 app = FastAPI(title="AES Assessment Service", version="0.1")
 
+DKM_PATH = os.getenv("AES_DKM_PATH", "/app/dkms/water-system")
+DKM_RULES = []
+
+
+def load_dkm_rules():
+    global DKM_RULES
+
+    rules_file = os.path.join(DKM_PATH, "assessment_rules.yaml")
+
+    with open(rules_file, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    DKM_RULES = data.get("assessment_rules", [])
+
+    print(f"[Assessment Service] Loaded {len(DKM_RULES)} assessment rules from DKM: {DKM_PATH}")
+
 
 def init_db():
     with db() as conn:
@@ -28,6 +46,8 @@ def init_db():
             severity TEXT NOT NULL,
             confidence DOUBLE PRECISION NOT NULL,
             summary TEXT NOT NULL,
+            rule_id TEXT,
+            dkm_id TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         """)
@@ -43,33 +63,71 @@ def load_evidence(evidence_id):
         """, (evidence_id,)).fetchone()
 
 
-def create_assessment(row):
-    evidence_id, managed_object_id, prop, value, unit, evidence_confidence = row
+def condition_matches(operator, left, right):
+    if operator == "<=":
+        return left <= right
+    if operator == "<":
+        return left < right
+    if operator == ">=":
+        return left >= right
+    if operator == ">":
+        return left > right
+    if operator == "==":
+        return left == right
+    return False
 
-    value_num = None
+
+def find_matching_rule(prop, unit, value):
     try:
         value_num = float(value)
     except Exception:
-        pass
+        value_num = value
 
-    assessment_type = "NormalCondition"
-    severity = "Info"
-    confidence = float(evidence_confidence)
-    summary = f"{prop} evidence is within normal assessment scope."
+    for rule in DKM_RULES:
+        applies = rule.get("applies_to", {})
+        condition = rule.get("condition", {})
 
-    if prop.lower() == "level" and unit == "%" and value_num is not None:
-        if value_num <= 10:
-            assessment_type = "CriticalLowTankLevel"
-            severity = "Critical"
-            summary = "Water tank level is critically low."
-        elif value_num <= 30:
-            assessment_type = "LowTankLevel"
-            severity = "Warning"
-            summary = "Water tank level is low."
-        else:
-            assessment_type = "NormalTankLevel"
-            severity = "Info"
-            summary = "Water tank level is normal."
+        rule_prop = str(applies.get("property", "")).lower()
+        rule_unit = applies.get("unit")
+
+        if rule_prop != str(prop).lower():
+            continue
+
+        if rule_unit != unit:
+            continue
+
+        operator = condition.get("operator")
+        rule_value = condition.get("value")
+
+        if isinstance(value_num, (float, int)):
+            rule_value = float(rule_value)
+
+        if condition_matches(operator, value_num, rule_value):
+            return rule
+
+    return None
+
+
+def create_assessment(row):
+    evidence_id, managed_object_id, prop, value, unit, evidence_confidence = row
+
+    rule = find_matching_rule(prop, unit, value)
+
+    if rule:
+        output = rule.get("output", {})
+        assessment_type = output.get("assessment_type", "UnknownAssessment")
+        severity = output.get("severity", "Info")
+        confidence = float(output.get("confidence", evidence_confidence))
+        summary = output.get("summary", "Assessment generated from DKM rule.")
+        rule_id = rule.get("id")
+        dkm_id = "water-system"
+    else:
+        assessment_type = "NoMatchingAssessmentRule"
+        severity = "Info"
+        confidence = float(evidence_confidence)
+        summary = "No matching assessment rule found in active DKM."
+        rule_id = None
+        dkm_id = "water-system"
 
     assessment_id = new_id("ASM")
 
@@ -82,9 +140,11 @@ def create_assessment(row):
                 assessment_type,
                 severity,
                 confidence,
-                summary
+                summary,
+                rule_id,
+                dkm_id
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (
             assessment_id,
             evidence_id,
@@ -93,6 +153,8 @@ def create_assessment(row):
             severity,
             confidence,
             summary,
+            rule_id,
+            dkm_id,
         ))
         conn.commit()
 
@@ -105,11 +167,13 @@ def create_assessment(row):
         "assessmentType": assessment_type,
         "severity": severity,
         "confidence": confidence,
+        "ruleId": rule_id,
+        "dkmId": dkm_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     publish_event(event)
-    print(f"[Assessment Service] AssessmentCreated published: {assessment_id}")
+    print(f"[Assessment Service] AssessmentCreated published: {assessment_id} using rule {rule_id}")
 
 
 def event_worker():
@@ -151,6 +215,7 @@ def event_worker():
 
 @app.on_event("startup")
 def startup():
+    load_dkm_rules()
     init_db()
     thread = threading.Thread(target=event_worker, daemon=True)
     thread.start()
@@ -158,4 +223,9 @@ def startup():
 
 @app.get("/health")
 def health():
-    return {"service": "AES Assessment Service", "status": "Healthy"}
+    return {
+        "service": "AES Assessment Service",
+        "status": "Healthy",
+        "dkmPath": DKM_PATH,
+        "rulesLoaded": len(DKM_RULES),
+    }

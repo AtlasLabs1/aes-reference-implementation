@@ -1,0 +1,8 @@
+﻿id: water-system
+name: Water System DKM
+version: 0.1.0
+status: draft
+domain: water
+description: Reference water system DKM for AES Hello World.
+compatibility:
+  aes_execution_model: "0.1"

@@ -1,0 +1,42 @@
+﻿assessment_rules:
+  - id: WTR-ASMT-001
+    name: Critical low tank level
+    applies_to:
+      property: level
+      unit: "%"
+    condition:
+      operator: "<="
+      value: 10
+    output:
+      assessment_type: CriticalLowTankLevel
+      severity: Critical
+      confidence: 1.0
+      summary: Water tank level is critically low.
+
+  - id: WTR-ASMT-002
+    name: Low tank level
+    applies_to:
+      property: level
+      unit: "%"
+    condition:
+      operator: "<="
+      value: 30
+    output:
+      assessment_type: LowTankLevel
+      severity: Warning
+      confidence: 1.0
+      summary: Water tank level is low.
+
+  - id: WTR-ASMT-003
+    name: Normal tank level
+    applies_to:
+      property: level
+      unit: "%"
+    condition:
+      operator: ">"
+      value: 30
+    output:
+      assessment_type: NormalTankLevel
+      severity: Info
+      confidence: 1.0
+      summary: Water tank level is normal.
