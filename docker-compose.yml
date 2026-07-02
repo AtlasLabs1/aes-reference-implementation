@@ -30,5 +30,19 @@
       - postgres
       - redis
 
+  evidence-service:
+    build:
+      context: .
+      dockerfile: execution/services/evidence/Dockerfile
+    container_name: aes-evidence-service
+    env_file:
+      - .env
+    ports:
+      - "8001:8001"
+    depends_on:
+      - postgres
+      - redis
+      - observation-service
+
 volumes:
   aes_postgres_data:
