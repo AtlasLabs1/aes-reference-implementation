@@ -1,0 +1,27 @@
+﻿recommendation_rules:
+  - id: WTR-REC-001
+    applies_to:
+      assessment_type: CriticalLowTankLevel
+    output:
+      recommendation_type: ImmediateRefillRequired
+      priority: High
+      summary: Start refill immediately or verify water supply availability.
+      action_hint: Check pump, inlet valve, and municipal supply.
+
+  - id: WTR-REC-002
+    applies_to:
+      assessment_type: LowTankLevel
+    output:
+      recommendation_type: PlanWaterRefill
+      priority: Medium
+      summary: Plan water refill soon.
+      action_hint: Monitor tank level and prepare refill if level continues decreasing.
+
+  - id: WTR-REC-003
+    applies_to:
+      assessment_type: NormalTankLevel
+    output:
+      recommendation_type: NoActionRequired
+      priority: Low
+      summary: No immediate water action required.
+      action_hint: Continue normal monitoring.

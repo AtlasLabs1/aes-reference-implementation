@@ -58,5 +58,19 @@
       - redis
       - evidence-service
 
+  recommendation-service:
+    build:
+      context: .
+      dockerfile: execution/services/recommendation/Dockerfile
+    container_name: aes-recommendation-service
+    env_file:
+      - .env
+    ports:
+      - "8003:8003"
+    depends_on:
+      - postgres
+      - redis
+      - assessment-service
+
 volumes:
   aes_postgres_data:
