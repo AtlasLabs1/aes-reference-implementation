@@ -44,5 +44,19 @@
       - redis
       - observation-service
 
+  assessment-service:
+    build:
+      context: .
+      dockerfile: execution/services/assessment/Dockerfile
+    container_name: aes-assessment-service
+    env_file:
+      - .env
+    ports:
+      - "8002:8002"
+    depends_on:
+      - postgres
+      - redis
+      - evidence-service
+
 volumes:
   aes_postgres_data:
