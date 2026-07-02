@@ -10,6 +10,5 @@ COPY execution/services/assessment/app ./app
 COPY dkms ./dkms
 
 ENV PYTHONPATH=/app/common
-ENV AES_DKM_PATH=/app/dkms/water-system
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8002"]

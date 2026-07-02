@@ -18,22 +18,6 @@ from aes_common.config import AES_EVENT_STREAM
 
 app = FastAPI(title="AES Assessment Service", version="0.1")
 
-DKM_PATH = os.getenv("AES_DKM_PATH", "/app/dkms/water-system")
-DKM_RULES = []
-
-
-def load_dkm_rules():
-    global DKM_RULES
-
-    rules_file = os.path.join(DKM_PATH, "assessment_rules.yaml")
-
-    with open(rules_file, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-
-    DKM_RULES = data.get("assessment_rules", [])
-
-    print(f"[Assessment Service] Loaded {len(DKM_RULES)} assessment rules from DKM: {DKM_PATH}")
-
 
 def init_db():
     with db() as conn:
@@ -46,12 +30,19 @@ def init_db():
             severity TEXT NOT NULL,
             confidence DOUBLE PRECISION NOT NULL,
             summary TEXT NOT NULL,
-            rule_id TEXT,
-            dkm_id TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         """)
         conn.commit()
+
+
+def load_water_dkm():
+    path = os.getenv("DKM_WATER_PATH", "/app/dkms/water/v0.1/water.dkm.yaml")
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+DKM = None
 
 
 def load_evidence(evidence_id):
@@ -63,71 +54,63 @@ def load_evidence(evidence_id):
         """, (evidence_id,)).fetchone()
 
 
-def condition_matches(operator, left, right):
-    if operator == "<=":
+def compare(operator, left, right):
+    if operator == "less_or_equal":
         return left <= right
-    if operator == "<":
+    if operator == "less_than":
         return left < right
-    if operator == ">=":
+    if operator == "greater_or_equal":
         return left >= right
-    if operator == ">":
+    if operator == "greater_than":
         return left > right
-    if operator == "==":
+    if operator == "equal":
         return left == right
     return False
 
 
-def find_matching_rule(prop, unit, value):
+def evaluate_dkm(evidence):
+    evidence_id, managed_object_id, prop, value, unit, evidence_confidence = evidence
+
     try:
         value_num = float(value)
     except Exception:
         value_num = value
 
-    for rule in DKM_RULES:
-        applies = rule.get("applies_to", {})
-        condition = rule.get("condition", {})
+    for rule in DKM.get("rules", []):
+        match = rule.get("match", {})
 
-        rule_prop = str(applies.get("property", "")).lower()
-        rule_unit = applies.get("unit")
-
-        if rule_prop != str(prop).lower():
+        if match.get("property") != prop:
             continue
 
-        if rule_unit != unit:
+        if match.get("unit") != unit:
             continue
 
-        operator = condition.get("operator")
-        rule_value = condition.get("value")
+        operator = match.get("operator")
+        target = match.get("value")
 
-        if isinstance(value_num, (float, int)):
-            rule_value = float(rule_value)
+        if compare(operator, value_num, target):
+            assessment = rule["assessment"]
 
-        if condition_matches(operator, value_num, rule_value):
-            return rule
+            return {
+                "ruleId": rule["id"],
+                "assessmentType": assessment["type"],
+                "severity": assessment["severity"],
+                "summary": assessment["summary"],
+                "confidence": float(assessment.get("confidence", evidence_confidence)),
+            }
 
-    return None
+    return {
+        "ruleId": "NO_MATCH",
+        "assessmentType": "NoAssessment",
+        "severity": "Info",
+        "summary": "No DKM rule matched this evidence.",
+        "confidence": 0.0,
+    }
 
 
-def create_assessment(row):
-    evidence_id, managed_object_id, prop, value, unit, evidence_confidence = row
-
-    rule = find_matching_rule(prop, unit, value)
-
-    if rule:
-        output = rule.get("output", {})
-        assessment_type = output.get("assessment_type", "UnknownAssessment")
-        severity = output.get("severity", "Info")
-        confidence = float(output.get("confidence", evidence_confidence))
-        summary = output.get("summary", "Assessment generated from DKM rule.")
-        rule_id = rule.get("id")
-        dkm_id = "water-system"
-    else:
-        assessment_type = "NoMatchingAssessmentRule"
-        severity = "Info"
-        confidence = float(evidence_confidence)
-        summary = "No matching assessment rule found in active DKM."
-        rule_id = None
-        dkm_id = "water-system"
+def create_assessment(evidence):
+    evidence_id, managed_object_id, prop, value, unit, evidence_confidence = evidence
+    result = evaluate_dkm(evidence)
 
     assessment_id = new_id("ASM")
 
@@ -140,21 +123,17 @@ def create_assessment(row):
                 assessment_type,
                 severity,
                 confidence,
-                summary,
-                rule_id,
-                dkm_id
+                summary
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
         """, (
             assessment_id,
             evidence_id,
             managed_object_id,
-            assessment_type,
-            severity,
-            confidence,
-            summary,
-            rule_id,
-            dkm_id,
+            result["assessmentType"],
+            result["severity"],
+            result["confidence"],
+            result["summary"],
         ))
         conn.commit()
 
@@ -164,16 +143,15 @@ def create_assessment(row):
         "assessmentId": assessment_id,
         "evidenceId": evidence_id,
         "managedObjectId": managed_object_id,
-        "assessmentType": assessment_type,
-        "severity": severity,
-        "confidence": confidence,
-        "ruleId": rule_id,
-        "dkmId": dkm_id,
+        "assessmentType": result["assessmentType"],
+        "severity": result["severity"],
+        "confidence": result["confidence"],
+        "ruleId": result["ruleId"],
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     publish_event(event)
-    print(f"[Assessment Service] AssessmentCreated published: {assessment_id} using rule {rule_id}")
+    print(f"[Assessment Service] AssessmentCreated published: {assessment_id} using rule {result['ruleId']}")
 
 
 def event_worker():
@@ -200,13 +178,13 @@ def event_worker():
                         continue
 
                     evidence_id = event.get("evidenceId")
-                    row = load_evidence(evidence_id)
+                    evidence = load_evidence(evidence_id)
 
-                    if not row:
+                    if not evidence:
                         print(f"[Assessment Service] Evidence not found: {evidence_id}")
                         continue
 
-                    create_assessment(row)
+                    create_assessment(evidence)
 
         except Exception as ex:
             print(f"[Assessment Service] Worker error: {ex}")
@@ -215,17 +193,14 @@ def event_worker():
 
 @app.on_event("startup")
 def startup():
-    load_dkm_rules()
+    global DKM
     init_db()
+    DKM = load_water_dkm()
+    print(f"[Assessment Service] Loaded DKM: {DKM['dkm']['name']} v{DKM['dkm']['version']}")
     thread = threading.Thread(target=event_worker, daemon=True)
     thread.start()
 
 
 @app.get("/health")
 def health():
-    return {
-        "service": "AES Assessment Service",
-        "status": "Healthy",
-        "dkmPath": DKM_PATH,
-        "rulesLoaded": len(DKM_RULES),
-    }
+    return {"service": "AES Assessment Service", "status": "Healthy", "dkm": DKM["dkm"] if DKM else None}

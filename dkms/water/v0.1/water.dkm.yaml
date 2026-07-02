@@ -1,0 +1,58 @@
+﻿dkm:
+  id: AEDS-DKM-WATER-001
+  name: Water Reference DKM
+  version: 0.1
+  domain: Water
+  status: Draft
+
+rules:
+  - id: WATER-LEVEL-CRITICAL-LOW
+    description: Detect critically low water tank level.
+    match:
+      property: level
+      unit: "%"
+      operator: less_or_equal
+      value: 10
+    assessment:
+      type: CriticalLowTankLevel
+      severity: Critical
+      summary: Water tank level is critically low.
+      confidence: 1.0
+    recommendation:
+      type: ImmediateWaterSupplyAction
+      priority: Critical
+      message: Water tank level is critically low. Refill immediately or start available pump if safe.
+
+  - id: WATER-LEVEL-LOW
+    description: Detect low water tank level.
+    match:
+      property: level
+      unit: "%"
+      operator: less_or_equal
+      value: 30
+    assessment:
+      type: LowTankLevel
+      severity: Warning
+      summary: Water tank level is low.
+      confidence: 1.0
+    recommendation:
+      type: PlanWaterRefill
+      priority: Warning
+      message: Water tank level is low. Plan refill or verify water supply availability.
+
+  - id: WATER-LEVEL-NORMAL
+    description: Detect normal water tank level.
+    match:
+      property: level
+      unit: "%"
+      operator: greater_than
+      value: 30
+    assessment:
+      type: NormalTankLevel
+      severity: Info
+      summary: Water tank level is normal.
+      confidence: 1.0
+    recommendation:
+      type: ContinueMonitoring
+      priority: Info
+      message: Water tank level is normal. Continue monitoring.
